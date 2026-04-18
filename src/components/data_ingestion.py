@@ -1,60 +1,107 @@
-import os
+import os 
 import sys
-import pandas as pd
 from src.logger import logging
+
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Tuple
+
+import pandas as pd
+
 from src.exception import CustomException
 
+
+_COLUMN_NAMES = (
+    ['unit_number', 'time_in_cycles', 'op_setting_1', 'op_setting_2', 'op_setting_3'] + 
+    [f'sensor_{i}' for i in range(1, 22)]
+)
+
+@dataclass
+class DataIngestionConfig:
+    raw_dir:str = os.path.join('artifacts', 'raw')
+    processed_dir:str = os.path.join('artifacts','processed')
+
+    train_file = 'train_FD001.txt'
+    test_file = 'test_FD001.txt'
+    rul_file = 'RUL_FD001.txt'
+
+
 class DataIngestion:
-    def __init__(self,
-                 raw_data_dir="D:/My Projects/Predictive Maintainability RUL/artifacts/raw",
-                 processed_data_dir="D:/My Projects/Predictive Maintainability RUL/artifacts/processed"):
-        self.raw_data_dir = raw_data_dir
-        self.processed_data_dir = processed_data_dir
-        os.makedirs(self.processed_data_dir, exist_ok=True)
 
 
-        self.column_names = (
-            ['unit_number', 'time_in_cycles',
-             'op_setting_1', 'op_setting_2', 'op_setting_3'] +
-            [f'sensor{i}' for i in range(1, 22)]
-        )
+    def __init__(self, config:DataIngestionConfig = None):
+        self.cfg = config or DataIngestionConfig()
+        Path(self.cfg.processed_dir).mkdir(parents=True, exist_ok=True)
+    
+    def _read_raw(self, filename):
+        path = os.path.join(self.cfg.raw_dir, filename)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f'Raw data file not found: {path}')
+        
+        df = pd.read_csv(path, sep=r"\s+", header=None, engine='python')
 
-    def initiate_data_ingestion(self, train_path: str, test_path: str, rul_path: str):
-        logging.info("Starting Data Ingestion")
+        if df.shape[1]>=28:
+            df.iloc[:, :26]
+        elif df.shape[1] != 26:
+            raise ValueError(
+                f'Unexpected column count {df.shape[1]} in {filename}.'
+                "Expected 26 ot 28 (with trailing NaN cols)"
+            )
+        df.columns = _COLUMN_NAMES
+        return df
+    
 
+    def _read_rul(self, filename):
+        path = os.path.join(self.cfg.raw_dir, filename)
+        if not os.path.exists(path):
+            raise FileNotFoundError(f'RUL File Not Found: {path}')
+        
+        rul = pd.read_csv(path, header=None, sep = r"\s+", names=['RUL'])
+        rul['unit_number'] = rul.index+1
+        return rul
+    
+
+    def initiate_data_ingestion(self):
         try:
- 
-            logging.info("Reading train and test datasets")
-            train_df = pd.read_csv(train_path, sep=r"\s+", header=None, names=self.column_names)
-            test_df = pd.read_csv(test_path, sep=r"\s+", header=None, names=self.column_names)
+            logger.info("Data Ingestion: Started")
 
- 
-            rul_df = pd.read_csv(rul_path, sep=r"\s+", header=None, names=['RUL'])
+            train_df = self._read_raw(self.cfg.train_file)
+            test_df = self._read_raw(self.cfg.test_file)
+            rul_df = self._read_rul(self.cfg.rul_file)
 
 
-            train_file = os.path.join(self.processed_data_dir, "train.csv")
-            test_file = os.path.join(self.processed_data_dir, "test.csv")
-            rul_file = os.path.join(self.processed_data_dir, "rul.csv")
+            logger.info(
+                f'\nTrain Shape: {train_df.shape}\nTest Shape: {test_df.shape}\nRUL rows: {rul_df.shape}'
+            )
 
-            train_df.to_csv(train_file, index=False)
-            test_df.to_csv(test_file, index=False)
-            rul_df.to_csv(rul_file, index=False)
 
-            logging.info(f"Train data saved at: {train_file}")
-            logging.info(f"Test data saved at: {test_file}")
-            logging.info(f"RUL data saved at: {rul_file}")
+            n_test_units = test_df['unit_number'].nunique()
+            if n_test_units != len(rul_df):
+                raise ValueError(
+                    f'Mismatch: {n_test_units} test units v {len(rul_df)} RUL entries'
+                )
+            
 
-            return train_file, test_file, rul_file
+            train_path = os.path.join(self.cfg.processed_dir, "train_raw.csv")
+            test_path = os.path.join(self.cfg.processed_dir, 'test_raw.csv')
+            rul_path = os.path.join(self.cfg.processed_dir, "rul.csv")
 
+            train_df.to_csv(train_path, index=False)
+            test_df.to_csv(test_path, index=False)
+            rul_df.to_csv(rul_path, index=False)
+
+            logger.info(f'Train, Test, RUL files saved.')
+            logger.info(f'Data Ingestion: Complete')
+
+            return train_path, test_path, rul_path
+
+
+        
         except Exception as e:
-            logging.error("Error occurred during data ingestion")
             raise CustomException(e, sys)
 
 
-if __name__ == "__main__":
-    obj = DataIngestion()
-    train_path = "D:/My Projects/Predictive Maintainability RUL/artifacts/raw/train_FD001.txt"
-    test_path = "D:/My Projects/Predictive Maintainability RUL/artifacts/raw/test_FD001.txt"
-    rul_path = "D:/My Projects/Predictive Maintainability RUL/artifacts/raw/RUL_FD001.txt"
 
-    obj.initiate_data_ingestion(train_path, test_path, rul_path)
+# if __name__=='__main__':
+#     obj = DataIngestion()
+#     obj.initiate_data_ingestion()
